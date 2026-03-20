@@ -20,10 +20,9 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
    - Bot permissions: e.g. "Send Messages", "Read Message History", "Manage Messages" (needed for `/clear`).
    - Open the generated URL and add the bot to your server.
 
-4. **Bot intents (required for some commands)**
-   - Developer Portal → Your App → **Bot** → **Privileged Gateway Intents**:
-     - Turn on **MESSAGE CONTENT INTENT** (needed for `/send` follow-up capture and `/clear`).
-     - Turn on **SERVER MEMBERS INTENT** (needed for `/user` member/join/roles).
+4. **Bot intents (no privileged toggles needed)**
+   - This bot only uses **Guilds** + **Guild Messages** (defaults you get when creating a bot).
+   - You do **not** need **Message Content** or **Server Members** — that avoids `Error: Used disallowed intents` if those switches are off in the Developer Portal.
 
 5. **Install and run**
    ```bash
@@ -43,7 +42,7 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
 - **`/help`** – Lists all commands and short usage (ephemeral).
 - **`/status`** – Uptime, WebSocket ping, memory, guild count (ephemeral).
 - **`/clear <count>`** – Deletes the last 1–100 messages in the current channel (skips pinned messages). Requires the bot to have "Manage Messages".
-- **`/send <channel>`** – Bot asks you to type your message **in the same channel within 10 seconds**; that text (and attachments) is posted to the chosen channel with the same formatting.
+- **`/send <channel>`** – Opens a **popup form**; what you type is posted to that channel with the same markdown/formatting (up to 4000 characters; no attachments via this flow).
 - **`/remind <minutes> <message>`** – After the delay, the bot posts a reminder in that channel and pings you.
 - **`/edit <message_link> <new_text>`** – Edits a message **sent by this bot** (use Copy Message Link, or `guildId-channelId-messageId`).
 - **`/dm <user> <message>`** – Sends a DM from the bot to that user (they must allow DMs from server members / share a server).
@@ -64,6 +63,10 @@ Push this folder to a GitHub repo, then in Railway: New Project → Deploy from 
 2. Railway will **detect the push**, build, and **redeploy** automatically.
 3. Open the Railway project → **Deployments** → latest deploy → **View logs** to confirm the bot started and registered commands.
 4. If slash commands look stale, run **`npm run register`** locally with the same `.env` as production (or set env vars and run register in a one-off shell), or rely on the bot’s startup registration in `index.js` (it registers on every boot).
+
+### `npm warn config production`
+
+Railway sometimes sets deprecated npm `production` config. It’s harmless. To prefer the new flag, add a variable in Railway: **`NPM_CONFIG_OMIT`** = `dev` (optional).
 
 ## Security
 

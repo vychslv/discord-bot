@@ -1,5 +1,15 @@
 import 'dotenv/config';
-import { Client, Events, GatewayIntentBits, REST, Routes } from 'discord.js';
+import {
+  ActionRowBuilder,
+  Client,
+  Events,
+  GatewayIntentBits,
+  ModalBuilder,
+  REST,
+  Routes,
+  TextInputBuilder,
+  TextInputStyle,
+} from 'discord.js';
 import { commands } from './commands.js';
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -29,13 +39,9 @@ function parseDiscordMessageUrl(url) {
 
 const startedAt = Date.now();
 
+/** Only non-privileged intents — avoids "Used disallowed intents" if you skip toggles in the Developer Portal. */
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
 client.once(Events.ClientReady, async (c) => {
@@ -62,16 +68,44 @@ const HELP_TEXT = [
   '`/help` — this list.',
   '`/status` — uptime, WebSocket ping, memory.',
   '`/clear count:N` — bulk-delete last N messages (Manage Messages).',
-  '`/send channel:#…` — then type your message **in this channel within 10 seconds**; bot posts it to the chosen channel with the same formatting.',
+  '`/send channel:#…` — a form opens; your text is sent to that channel with the same markdown/formatting (no privileged intents needed).',
   '`/remind minutes:N message:…` — pings you in this channel when time is up.',
   '`/edit message_link:… new_text:…` — edit a message **from this bot** (use Copy Message Link).',
   '`/dm user:@… message:…` — bot DMs that user.',
   '`/user member:@…` — ID, account age, server join, roles, avatar.',
   '',
-  '**Developer Portal → Bot:** enable **Message Content Intent** and **Server Members Intent** for `/send` and `/user`.',
+  '**Intents:** this bot uses only default + **Guild Messages** (no Message Content / Server Members required).',
 ].join('\n');
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isModalSubmit()) {
+    if (!isOwner(interaction.user.id)) {
+      await interaction.reply({ content: 'Only the bot owner can use this.', ephemeral: true });
+      return;
+    }
+    if (!interaction.customId.startsWith('send:')) return;
+    const channelId = interaction.customId.slice('send:'.length);
+    const text = interaction.fields.getTextInputValue('send_body').trim();
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      if (!text) {
+        await interaction.editReply({ content: 'Message was empty. Nothing sent.' });
+        return;
+      }
+      const targetChannel = await client.channels.fetch(channelId);
+      if (!targetChannel?.isTextBased()) {
+        await interaction.editReply({ content: 'Invalid channel.' });
+        return;
+      }
+      await targetChannel.send({ content: text });
+      await interaction.editReply({ content: `Sent to ${targetChannel}.` });
+    } catch (err) {
+      console.error(err);
+      await interaction.editReply({ content: `Failed: ${err.message}` }).catch(() => {});
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   if (!isOwner(interaction.user.id)) {
@@ -139,54 +173,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    const listenChannel = interaction.channel;
-    if (!listenChannel?.isTextBased()) {
-      await interaction.reply({
-        content: 'Run `/send` from a server text channel so the bot can read your follow-up message.',
-        ephemeral: true,
-      });
-      return;
-    }
+    const modal = new ModalBuilder()
+      .setCustomId(`send:${targetChannel.id}`)
+      .setTitle('Message to send');
 
-    await interaction.reply({
-      content: `Type your message **in this channel** within **10 seconds**. It will be sent to ${targetChannel} with the same formatting (markdown, line breaks). Attachments are forwarded too.`,
-      ephemeral: true,
-    });
+    const body = new TextInputBuilder()
+      .setCustomId('send_body')
+      .setLabel(`Send to #${targetChannel.name}`.slice(0, 45))
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Markdown, line breaks, and emoji are kept as you type.')
+      .setRequired(true)
+      .setMaxLength(4000);
 
-    try {
-      const collected = await listenChannel.awaitMessages({
-        filter: (m) => m.author.id === interaction.user.id && !m.author.bot,
-        max: 1,
-        time: 10_000,
-        errors: ['time'],
-      });
-      const msg = collected.first();
-      const fileParts = [...msg.attachments.values()].map((a) => ({
-        attachment: a.url,
-        name: a.name || 'attachment',
-      }));
-      const sendOpts = {
-        ...(msg.content ? { content: msg.content } : {}),
-        ...(fileParts.length ? { files: fileParts } : {}),
-      };
-      if (!sendOpts.content && !sendOpts.files) {
-        await interaction.followUp({
-          content: 'Empty message (no text and no attachments). Nothing sent.',
-          ephemeral: true,
-        });
-        return;
-      }
-      await targetChannel.send(sendOpts);
-      await interaction.followUp({
-        content: `Sent to ${targetChannel}.`,
-        ephemeral: true,
-      });
-    } catch {
-      await interaction.followUp({
-        content: 'No message received within 10 seconds. Cancelled.',
-        ephemeral: true,
-      });
-    }
+    modal.addComponents(new ActionRowBuilder().addComponents(body));
+    await interaction.showModal(modal);
     return;
   }
 
@@ -287,7 +287,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       ];
       if (interaction.inGuild()) {
         const guild = interaction.guild;
-        const member = await guild.members.fetch({ user, force: false }).catch(() => null);
+        const member = interaction.options.getMember('member');
         if (member) {
           const joined = member.joinedTimestamp;
           if (joined) {
