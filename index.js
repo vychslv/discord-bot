@@ -294,15 +294,31 @@ async function finalizeGiveaway(guildId) {
         return;
       }
 
-      // Ensure reactions/users are fetched.
-      await entryMsg.reactions.fetch().catch(() => {});
-      const reaction = entryMsg.reactions.resolve(entryEmoji);
-      if (!reaction) {
+      // Note: some hosts/panel setups don't expose `entryMsg.reactions.fetch()`.
+      // We avoid calling it and instead rely on `message.reactions.resolve(...)`
+      // and a best-effort `entryMsg.fetch()` retry below.
+
+      const reaction =
+        typeof entryMsg.reactions?.resolve === 'function'
+          ? entryMsg.reactions.resolve(entryEmoji)
+          : entryMsg.reactions?.cache?.get(entryEmoji) ?? null;
+
+      // If reactions weren't cached (common after some restarts/hosts), refetch the message once.
+      let finalReaction = reaction;
+      if (!finalReaction && typeof entryMsg.fetch === 'function') {
+        await entryMsg.fetch().catch(() => null);
+        finalReaction =
+          typeof entryMsg.reactions?.resolve === 'function'
+            ? entryMsg.reactions.resolve(entryEmoji)
+            : entryMsg.reactions?.cache?.get(entryEmoji) ?? null;
+      }
+
+      if (!finalReaction) {
         await channel.send('Giveaway cancelled.');
         return;
       }
 
-      const users = await reaction.users.fetch().catch(() => new Map());
+      const users = await finalReaction.users.fetch().catch(() => new Map());
       const eligibleIds = [];
       for (const userId of users.keys()) {
         if (!userId || userId === OWNER_ID) continue;
