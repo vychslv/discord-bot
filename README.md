@@ -53,7 +53,7 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
 - **`/goodbye set <channel> <message>`** – Sends a goodbye template to leaving members (use `{member}` for mention).
 - **`/goodbye off`** – Disables goodbye messages.
 - **`/rr ...`** – Reaction self-role panels:
-  - `/rr create channel:<#> message:<text>`
+  - `/rr create channel:<#>` (then type the panel text in the popup window)
   - `/rr add message_link:<link> emoji:<emoji> role:<@role>`
   - `/rr remove message_link:<link> emoji:<emoji>`
   - `/rr list message_link:<link>`

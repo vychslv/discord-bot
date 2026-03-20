@@ -189,12 +189,6 @@ export const commands = [
             required: true,
             channel_types: [0, 5, 11],
           },
-          {
-            name: 'message',
-            type: ApplicationCommandOptionType.String,
-            description: 'Panel text',
-            required: true,
-          },
         ],
       },
       {

@@ -3,13 +3,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ActionRowBuilder,
   Client,
   Events,
   GatewayIntentBits,
   MessageFlags,
   Partials,
+  ModalBuilder,
   REST,
   Routes,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
 import { commands } from './commands.js';
 
@@ -562,6 +566,75 @@ const HELP_TEXT = [
 ].join('\n');
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isModalSubmit()) {
+    if (!interaction.customId.startsWith('rrcreate:')) return;
+    if (!isOwner(interaction.user.id)) {
+      await interaction.reply({
+        content: 'Only the bot owner can use this.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const payload = interaction.customId.slice('rrcreate:'.length);
+    const [ownerId, channelId] = payload.split(':');
+    if (ownerId !== interaction.user.id) {
+      await interaction.reply({
+        content: 'This modal is not for you.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.reply({ content: 'Run this in a server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (GUILD_ID && guildId !== GUILD_ID) {
+      await interaction.reply({
+        content: 'This bot is configured for a single server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const messageText = interaction.fields.getTextInputValue('rrcreate_message').trim();
+    if (!messageText) {
+      await interaction.reply({
+        content: 'Panel message was empty.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    try {
+      const ch = await client.channels.fetch(channelId);
+      if (!ch?.isTextBased()) {
+        await interaction.reply({ content: 'Invalid channel.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const panelMessage = await ch.send(
+        `${messageText}\n\nReact with the configured emojis to get roles.`,
+      );
+      const panel = getReactionPanel(guildId, panelMessage.id);
+      panel.channelId = ch.id;
+      panel.enabled = true;
+      if (!panel.rolesByEmojiKey) panel.rolesByEmojiKey = {};
+      saveReactionRolesConfig();
+
+      await interaction.reply({
+        content: `Panel created. Use this link in /rr add:\n${panelMessage.url}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (err) {
+      console.error('RR create modal failed:', err);
+      await interaction.reply({ content: `Failed: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   if (!isOwner(interaction.user.id)) {
@@ -589,29 +662,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (sub === 'create') {
       const channel = interaction.options.getChannel('channel', true);
-      const messageText = interaction.options.getString('message', true);
       if (!channel?.isTextBased()) {
         await interaction.reply({ content: 'Pick a text channel.', flags: MessageFlags.Ephemeral });
         return;
       }
 
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      try {
-        const panelMessage = await channel.send(`${messageText}\n\nReact with the configured emojis to get roles.`);
-        const panel = getReactionPanel(guildId, panelMessage.id);
-        panel.channelId = channel.id;
-        panel.enabled = true;
-        // Keep existing mapping if it exists (re-create after crash).
-        if (!panel.rolesByEmojiKey) panel.rolesByEmojiKey = {};
-        saveReactionRolesConfig();
+      const modal = new ModalBuilder()
+        .setCustomId(`rrcreate:${interaction.user.id}:${channel.id}`)
+        .setTitle('Reaction roles panel message');
 
-        await interaction.editReply({
-          content: `Panel created. Use this link in /rr add:\n${panelMessage.url}`,
-        });
-      } catch (err) {
-        console.error('RR create failed:', err);
-        await interaction.editReply({ content: `Failed: ${err.message}` }).catch(() => {});
-      }
+      const messageInput = new TextInputBuilder()
+        .setCustomId('rrcreate_message')
+        .setLabel('Panel message')
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder('Type the message that users will react to')
+        .setRequired(true)
+        .setMaxLength(2000);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
+      await interaction.showModal(modal);
       return;
     }
 
