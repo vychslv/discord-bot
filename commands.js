@@ -302,15 +302,6 @@ export const commands = [
             ],
           },
           {
-            name: 'duration_hours',
-            // kept for backward compatibility in Discord registrations
-            type: ApplicationCommandOptionType.Integer,
-            description: 'Deprecated (use minutes/seconds)',
-            required: false,
-            min_value: 0,
-            max_value: 168,
-          },
-          {
             name: 'duration_minutes',
             type: ApplicationCommandOptionType.Integer,
             description: 'Duration minutes',
@@ -338,6 +329,15 @@ export const commands = [
             type: ApplicationCommandOptionType.String,
             description: 'Custom giveaway text/prize message',
             required: true,
+          },
+          {
+            name: 'duration_hours',
+            // kept for backward compatibility in Discord registrations
+            type: ApplicationCommandOptionType.Integer,
+            description: 'Deprecated (use minutes/seconds)',
+            required: false,
+            min_value: 0,
+            max_value: 168,
           },
         ],
       },
