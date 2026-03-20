@@ -20,9 +20,9 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
    - Bot permissions: e.g. "Send Messages", "Read Message History", "Manage Messages" (needed for `/clear`).
    - Open the generated URL and add the bot to your server.
 
-4. **Bot intents (no privileged toggles needed)**
-   - This bot only uses **Guilds** + **Guild Messages** (defaults you get when creating a bot).
-   - You do **not** need **Message Content** or **Server Members** — that avoids `Error: Used disallowed intents` if those switches are off in the Developer Portal.
+4. **Bot intents**
+   - For `/send` text capture, enable **Message Content Intent**.
+   - For **welcome/goodbye** (join/leave events), enable **Server Members Intent** (Guild Members).
 
 5. **Install and run**
    ```bash
@@ -42,11 +42,15 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
 - **`/help`** – Lists all commands and short usage (ephemeral).
 - **`/status`** – Uptime, WebSocket ping, memory, guild count (ephemeral).
 - **`/clear <count>`** – Deletes the last 1–100 messages in the current channel (skips pinned messages). Requires the bot to have "Manage Messages".
-- **`/send <channel>`** – Opens a **popup form**; what you type is posted to that channel with the same markdown/formatting (up to 4000 characters; no attachments via this flow).
+- **`/send <channel>`** – Bot waits 10 seconds for your next message in the same channel, then forwards exact text + attachments/images to the chosen channel.
 - **`/remind <minutes> <message>`** – After the delay, the bot posts a reminder in that channel and pings you.
 - **`/edit <message_link> <new_text>`** – Edits a message **sent by this bot** (use Copy Message Link, or `guildId-channelId-messageId`).
 - **`/dm <user> <message>`** – Sends a DM from the bot to that user (they must allow DMs from server members / share a server).
 - **`/user <member>`** – Shows user ID, account age, server join, nickname, roles, avatar URL.
+- **`/welcome set <channel> <message>`** – Sends a welcome template to new members (use `{member}` for mention).
+- **`/welcome off`** – Disables welcome messages.
+- **`/goodbye set <channel> <message>`** – Sends a goodbye template to leaving members (use `{member}` for mention).
+- **`/goodbye off`** – Disables goodbye messages.
 
 ## Deploy to Railway
 

@@ -31,7 +31,7 @@ export const commands = [
   {
     name: 'send',
     description:
-      'Pick a channel, then fill the popup form — bot posts your text (owner only)',
+      'Pick a channel, then send your next message in 10s (text + attachments) (owner only)',
     options: [
       {
         name: 'channel',
@@ -108,6 +108,68 @@ export const commands = [
         type: ApplicationCommandOptionType.User,
         description: 'User to look up',
         required: true,
+      },
+    ],
+  },
+  {
+    name: 'welcome',
+    description: 'Send welcome messages to a channel (owner only)',
+    options: [
+      {
+        name: 'set',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Enable welcome messages',
+        options: [
+          {
+            name: 'channel',
+            type: ApplicationCommandOptionType.Channel,
+            description: 'Channel for welcome',
+            required: true,
+            channel_types: [0, 5, 11],
+          },
+          {
+            name: 'message',
+            type: ApplicationCommandOptionType.String,
+            description: 'Template; use {member}, {username}, {guild}',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'off',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Disable welcome messages',
+      },
+    ],
+  },
+  {
+    name: 'goodbye',
+    description: 'Send goodbye messages to a channel (owner only)',
+    options: [
+      {
+        name: 'set',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Enable goodbye messages',
+        options: [
+          {
+            name: 'channel',
+            type: ApplicationCommandOptionType.Channel,
+            description: 'Channel for goodbye',
+            required: true,
+            channel_types: [0, 5, 11],
+          },
+          {
+            name: 'message',
+            type: ApplicationCommandOptionType.String,
+            description: 'Template; use {member}, {username}, {guild}',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'off',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Disable goodbye messages',
       },
     ],
   },

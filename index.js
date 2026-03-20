@@ -1,15 +1,14 @@
 import 'dotenv/config';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  ActionRowBuilder,
   Client,
   Events,
   GatewayIntentBits,
   MessageFlags,
-  ModalBuilder,
   REST,
   Routes,
-  TextInputBuilder,
-  TextInputStyle,
 } from 'discord.js';
 import { commands } from './commands.js';
 
@@ -40,10 +39,82 @@ function parseDiscordMessageUrl(url) {
 
 const startedAt = Date.now();
 
-/** Only non-privileged intents — avoids "Used disallowed intents" if you skip toggles in the Developer Portal. */
+/** Welcome/goodbye requires Guild Members intent. */
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.MessageContent,
+  ],
 });
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.join(__dirname, 'data');
+const GREETINGS_PATH = path.join(DATA_DIR, 'greetings.json');
+
+const DEFAULT_GUILD_CONFIG = {
+  welcome: {
+    enabled: false,
+    channelId: null,
+    message: 'Welcome {member}!',
+  },
+  goodbye: {
+    enabled: false,
+    channelId: null,
+    message: 'Goodbye {member}!',
+  },
+};
+
+/** @type {Record<string, typeof DEFAULT_GUILD_CONFIG>} */
+let greetingsByGuildId = {};
+
+function loadGreetingsConfig() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(GREETINGS_PATH)) {
+      fs.writeFileSync(GREETINGS_PATH, JSON.stringify({}, null, 2), 'utf8');
+    }
+    const raw = fs.readFileSync(GREETINGS_PATH, 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    greetingsByGuildId = parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    console.error('Failed to load greetings config:', err);
+    greetingsByGuildId = {};
+  }
+}
+
+function saveGreetingsConfig() {
+  try {
+    fs.writeFileSync(GREETINGS_PATH, JSON.stringify(greetingsByGuildId, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save greetings config:', err);
+  }
+}
+
+function getGuildConfig(guildId) {
+  if (!greetingsByGuildId[guildId]) {
+    // Deep clone defaults so we never mutate the same object reference.
+    greetingsByGuildId[guildId] = JSON.parse(JSON.stringify(DEFAULT_GUILD_CONFIG));
+  }
+  return greetingsByGuildId[guildId];
+}
+
+function renderGreeting(template, member) {
+  const content = template ?? '';
+  return content
+    .replaceAll('{member}', `<@${member.id}>`)
+    .replaceAll('{username}', member.user.username)
+    .replaceAll('{tag}', member.user.tag)
+    .replaceAll('{displayName}', member.displayName ?? member.user.username)
+    .replaceAll('{guild}', member.guild?.name ?? '')
+    .replaceAll(
+      '{memberCount}',
+      String(member.guild?.memberCount ?? ''),
+    );
+}
+
+loadGreetingsConfig();
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`Logged in as ${c.user.tag}`);
@@ -63,53 +134,53 @@ client.once(Events.ClientReady, async (c) => {
   }
 });
 
+async function sendGreeting(kind, member) {
+  const guildId = member.guild?.id;
+  if (!guildId) return;
+  if (GUILD_ID && guildId !== GUILD_ID) return;
+
+  const cfg = getGuildConfig(guildId);
+  const entry = cfg[kind];
+  if (!entry?.enabled || !entry?.channelId) return;
+
+  const channel = await client.channels.fetch(entry.channelId).catch(() => null);
+  if (!channel?.isTextBased()) return;
+
+  const rendered = renderGreeting(entry.message, member);
+  if (!rendered.trim()) return;
+  await channel.send({ content: rendered });
+}
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  if (member.user.bot) return;
+  await sendGreeting('welcome', member);
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  if (member.user.bot) return;
+  await sendGreeting('goodbye', member);
+});
+
 const HELP_TEXT = [
   '**Owner commands**',
   '`/ping` — quick alive check.',
   '`/help` — this list.',
   '`/status` — uptime, WebSocket ping, memory.',
   '`/clear count:N` — bulk-delete last N messages (Manage Messages).',
-  '`/send channel:#…` — a form opens; your text is sent to that channel with the same markdown/formatting (no privileged intents needed).',
+  '`/send channel:#…` — send your next message in 10s; text + images/files are forwarded exactly.',
   '`/remind minutes:N message:…` — pings you in this channel when time is up.',
   '`/edit message_link:… new_text:…` — edit a message **from this bot** (use Copy Message Link).',
   '`/dm user:@… message:…` — bot DMs that user.',
   '`/user member:@…` — ID, account age, server join, roles, avatar.',
+  '`/welcome set channel:#… message:…` — welcome new members.',
+  '`/welcome off` — disable welcome messages.',
+  '`/goodbye set channel:#… message:…` — say goodbye on leave.',
+  '`/goodbye off` — disable goodbye messages.',
   '',
-  '**Intents:** this bot uses only default + **Guild Messages** (no Message Content / Server Members required).',
+  '**Intents:** welcome/goodbye uses Server Members; /send text capture uses Message Content.',
 ].join('\n');
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (interaction.isModalSubmit()) {
-    if (!isOwner(interaction.user.id)) {
-      await interaction.reply({
-        content: 'Only the bot owner can use this.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    if (!interaction.customId.startsWith('send:')) return;
-    const channelId = interaction.customId.slice('send:'.length);
-    const text = interaction.fields.getTextInputValue('send_body').trim();
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    try {
-      if (!text) {
-        await interaction.editReply({ content: 'Message was empty. Nothing sent.' });
-        return;
-      }
-      const targetChannel = await client.channels.fetch(channelId);
-      if (!targetChannel?.isTextBased()) {
-        await interaction.editReply({ content: 'Invalid channel.' });
-        return;
-      }
-      await targetChannel.send({ content: text });
-      await interaction.editReply({ content: `Sent to ${targetChannel}.` });
-    } catch (err) {
-      console.error(err);
-      await interaction.editReply({ content: `Failed: ${err.message}` }).catch(() => {});
-    }
-    return;
-  }
-
   if (!interaction.isChatInputCommand()) return;
 
   if (!isOwner(interaction.user.id)) {
@@ -118,6 +189,94 @@ client.on(Events.InteractionCreate, async (interaction) => {
       flags: MessageFlags.Ephemeral,
     });
     return;
+  }
+
+  if (interaction.commandName === 'welcome') {
+    const sub = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.reply({ content: 'Run this command in a server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (GUILD_ID && guildId !== GUILD_ID) {
+      await interaction.reply({
+        content: 'This bot is configured for a single server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    const cfg = getGuildConfig(guildId);
+    if (sub === 'set') {
+      const channel = interaction.options.getChannel('channel', true);
+      const message = interaction.options.getString('message', true);
+      if (!channel?.isTextBased()) {
+        await interaction.reply({ content: 'Pick a text channel.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      cfg.welcome.enabled = true;
+      cfg.welcome.channelId = channel.id;
+      cfg.welcome.message = message;
+      saveGreetingsConfig();
+      await interaction.reply({
+        content: `Welcome enabled in ${channel}. Template saved.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (sub === 'off') {
+      cfg.welcome.enabled = false;
+      cfg.welcome.channelId = null;
+      saveGreetingsConfig();
+      await interaction.reply({
+        content: 'Welcome disabled.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  }
+
+  if (interaction.commandName === 'goodbye') {
+    const sub = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.reply({ content: 'Run this command in a server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (GUILD_ID && guildId !== GUILD_ID) {
+      await interaction.reply({
+        content: 'This bot is configured for a single server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    const cfg = getGuildConfig(guildId);
+    if (sub === 'set') {
+      const channel = interaction.options.getChannel('channel', true);
+      const message = interaction.options.getString('message', true);
+      if (!channel?.isTextBased()) {
+        await interaction.reply({ content: 'Pick a text channel.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      cfg.goodbye.enabled = true;
+      cfg.goodbye.channelId = channel.id;
+      cfg.goodbye.message = message;
+      saveGreetingsConfig();
+      await interaction.reply({
+        content: `Goodbye enabled in ${channel}. Template saved.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (sub === 'off') {
+      cfg.goodbye.enabled = false;
+      cfg.goodbye.channelId = null;
+      saveGreetingsConfig();
+      await interaction.reply({
+        content: 'Goodbye disabled.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
   }
 
   if (interaction.commandName === 'ping') {
@@ -180,20 +339,58 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    const modal = new ModalBuilder()
-      .setCustomId(`send:${targetChannel.id}`)
-      .setTitle('Message to send');
+    const listenChannel = interaction.channel;
+    if (!listenChannel?.isTextBased()) {
+      await interaction.reply({
+        content: 'Run `/send` from a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
-    const body = new TextInputBuilder()
-      .setCustomId('send_body')
-      .setLabel(`Send to #${targetChannel.name}`.slice(0, 45))
-      .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('Markdown, line breaks, and emoji are kept as you type.')
-      .setRequired(true)
-      .setMaxLength(4000);
+    await interaction.reply({
+      content:
+        `Send your next message in this channel within 10 seconds. ` +
+        `I will forward text + attachments to ${targetChannel}.`,
+      flags: MessageFlags.Ephemeral,
+    });
 
-    modal.addComponents(new ActionRowBuilder().addComponents(body));
-    await interaction.showModal(modal);
+    try {
+      const collected = await listenChannel.awaitMessages({
+        filter: (m) => m.author.id === interaction.user.id && !m.author.bot,
+        max: 1,
+        time: 10_000,
+        errors: ['time'],
+      });
+      const src = collected.first();
+      const files = [...src.attachments.values()].map((a) => ({
+        attachment: a.url,
+        name: a.name || 'attachment',
+      }));
+      const payload = {
+        ...(src.content ? { content: src.content } : {}),
+        ...(files.length ? { files } : {}),
+      };
+
+      if (!payload.content && !payload.files) {
+        await interaction.followUp({
+          content: 'No text or attachments found. Nothing sent.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await targetChannel.send(payload);
+      await interaction.followUp({
+        content: `Sent to ${targetChannel}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch {
+      await interaction.followUp({
+        content: 'No message received within 10 seconds. Cancelled.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
     return;
   }
 
