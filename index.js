@@ -281,15 +281,42 @@ async function finalizeGiveaway(guildId) {
     const winnersMessagePrefix = 'Winner';
 
     if (type === 'random') {
-      const members = await guild.members.fetch().catch(() => null);
-      const liveIds = members ? [...members.values()].filter(isRealEligibleMember).map((m) => m.id) : [];
-
-      if (!liveIds.length) {
+      const entryEmoji = giveaway.entryEmoji ?? '🎉';
+      const messageId = giveaway.giveawayMessageId;
+      if (!messageId) {
         await channel.send('Giveaway cancelled.');
-      } else {
-        const winnerId = liveIds[Math.floor(Math.random() * liveIds.length)];
-        await channel.send(`${winnersMessagePrefix}: <@${winnerId}>`);
+        return;
       }
+
+      const entryMsg = await channel.messages.fetch(messageId).catch(() => null);
+      if (!entryMsg) {
+        await channel.send('Giveaway cancelled.');
+        return;
+      }
+
+      // Ensure reactions/users are fetched.
+      await entryMsg.reactions.fetch().catch(() => {});
+      const reaction = entryMsg.reactions.resolve(entryEmoji);
+      if (!reaction) {
+        await channel.send('Giveaway cancelled.');
+        return;
+      }
+
+      const users = await reaction.users.fetch().catch(() => new Map());
+      const eligibleIds = [];
+      for (const userId of users.keys()) {
+        if (!userId || userId === OWNER_ID) continue;
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (member && isRealEligibleMember(member)) eligibleIds.push(userId);
+      }
+
+      if (!eligibleIds.length) {
+        await channel.send('Giveaway cancelled.');
+        return;
+      }
+
+      const winnerId = eligibleIds[Math.floor(Math.random() * eligibleIds.length)];
+      await channel.send(`${winnersMessagePrefix}: <@${winnerId}>`);
     } else if (type === 'invites') {
       const scores = giveaway.inviteScoresByInviterId || {};
       const nonOwner = Object.entries(scores).filter(
@@ -558,7 +585,7 @@ const HELP_TEXT = [
   '`/goodbye set channel:#… message:…` — say goodbye on leave.',
   '`/goodbye off` — disable goodbye messages.',
   '`/rr create` `/rr add` `/rr remove` `/rr list` `/rr clear` `/rr delete` — reaction self-roles panels.',
-  '`/giveaway start type:<random|invites> duration_hours:<n> channel:<#>` — start a timed giveaway.',
+  '`/giveaway start type:<random|invites> duration_minutes:<n> duration_seconds:<n> channel:<#> prize_message:<text>` — start a timed giveaway.',
   '`/giveaway status` — show time left for the active giveaway.',
   '`/giveaway cancel` — cancel the active giveaway.',
   '',
@@ -938,8 +965,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const type = interaction.options.getString('type', true);
-      const durationHours = interaction.options.getInteger('duration_hours', true);
+      // Prefer minutes/seconds, but keep duration_hours for older registered commands.
+      const durationMinutes = interaction.options.getInteger('duration_minutes', false) ?? null;
+      const durationSeconds = interaction.options.getInteger('duration_seconds', false) ?? null;
+      const durationHours = interaction.options.getInteger('duration_hours', false) ?? null;
       const channel = interaction.options.getChannel('channel', true);
+      const prizeMessage = interaction.options.getString('prize_message', true);
 
       if (!channel?.isTextBased()) {
         await interaction.reply({ content: 'Pick a text channel.', flags: MessageFlags.Ephemeral });
@@ -947,7 +978,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const startedAt = Date.now();
-      const endsAt = startedAt + durationHours * 60 * 60 * 1000;
+      let totalSeconds = 0;
+      if (durationMinutes !== null || durationSeconds !== null) {
+        const m = durationMinutes ?? 0;
+        const s = durationSeconds ?? 0;
+        totalSeconds = m * 60 + s;
+      } else if (durationHours !== null) {
+        totalSeconds = durationHours * 60 * 60;
+      }
+      if (totalSeconds <= 0) {
+        await interaction.reply({
+          content: 'Duration must be > 0 (use minutes/seconds).',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const endsAt = startedAt + totalSeconds * 1000;
 
       const giveaway = {
         guildId,
@@ -956,11 +1003,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         startedAt,
         endsAt,
         finalized: false,
-        eligibleRandomMemberIds: [],
+        entryEmoji: '🎉',
+        giveawayMessageId: null,
         inviteScoresByInviterId: {},
         fakeInviteCount: 0,
         inviteSnapshotByCode: {},
       };
+
+      // Post the giveaway entry message immediately so random winners can be selected from reactors.
+      if (type === 'random') {
+        const entryText = `${prizeMessage}\n\nReact with 🎉 to enter.`;
+        const entryMsg = await channel.send(entryText);
+        await entryMsg.react(giveaway.entryEmoji);
+        giveaway.giveawayMessageId = entryMsg.id;
+      } else {
+        // "invites" is a contest; no reaction entry needed.
+        const entryMsg = await channel.send(prizeMessage);
+        giveaway.giveawayMessageId = entryMsg.id;
+      }
 
       // Build invite snapshot at start (only for invite-based giveaways).
       if (type === 'invites') {
@@ -989,7 +1049,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       scheduleGiveawayFinalize(guildId);
 
       await interaction.reply({
-        content: `Giveaway started (${type}) for ${durationHours} hour(s).`,
+        content: `Giveaway started (${type}) for ${formatMs(totalSeconds * 1000)}.`,
         flags: MessageFlags.Ephemeral,
       });
       return;

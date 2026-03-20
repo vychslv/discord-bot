@@ -60,7 +60,7 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
   - `/rr clear message_link:<link>`
   - `/rr delete message_link:<link> delete_message:<true|false>`
 - **`/giveaway ...`** – Timed giveaways:
-  - `/giveaway start type:<random|invites> duration_hours:<n> channel:<#>`
+  - `/giveaway start type:<random|invites> duration_minutes:<n> duration_seconds:<n> channel:<#> prize_message:<text>`
   - `/giveaway status`
   - `/giveaway cancel`
 
