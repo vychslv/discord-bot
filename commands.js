@@ -31,7 +31,7 @@ export const commands = [
   {
     name: 'send',
     description:
-      'Pick a channel, then fill the popup form — bot sends that text there with same formatting (owner only)',
+      'Pick a channel, then fill the popup form — bot posts your text (owner only)',
     options: [
       {
         name: 'channel',
