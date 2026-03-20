@@ -4,6 +4,9 @@
   "description": "Discord bot that only responds to the owner",
   "main": "index.js",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node index.js",
     "register": "node register-commands.js"

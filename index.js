@@ -224,7 +224,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!parsed) {
       await interaction.reply({
         content:
-          'Invalid link. Use **Copy Message Link** on the bot’s message, or format `guildId-channelId-messageId`.',
+          "Invalid link. Use **Copy Message Link** on the bot's message, or format `guildId-channelId-messageId`.",
         ephemeral: true,
       });
       return;
