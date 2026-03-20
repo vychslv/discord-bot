@@ -4,6 +4,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   ModalBuilder,
   REST,
   Routes,
@@ -80,13 +81,16 @@ const HELP_TEXT = [
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit()) {
     if (!isOwner(interaction.user.id)) {
-      await interaction.reply({ content: 'Only the bot owner can use this.', ephemeral: true });
+      await interaction.reply({
+        content: 'Only the bot owner can use this.',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
     if (!interaction.customId.startsWith('send:')) return;
     const channelId = interaction.customId.slice('send:'.length);
     const text = interaction.fields.getTextInputValue('send_body').trim();
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       if (!text) {
         await interaction.editReply({ content: 'Message was empty. Nothing sent.' });
@@ -109,17 +113,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (!isOwner(interaction.user.id)) {
-    await interaction.reply({ content: 'Only the bot owner can use commands.', ephemeral: true });
+    await interaction.reply({
+      content: 'Only the bot owner can use commands.',
+      flags: MessageFlags.Ephemeral,
+    });
     return;
   }
 
   if (interaction.commandName === 'ping') {
-    await interaction.reply({ content: 'Pong!', ephemeral: true });
+    await interaction.reply({ content: 'Pong!', flags: MessageFlags.Ephemeral });
     return;
   }
 
   if (interaction.commandName === 'help') {
-    await interaction.reply({ content: HELP_TEXT, ephemeral: true });
+    await interaction.reply({ content: HELP_TEXT, flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -138,13 +145,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       `**Guilds:** ${client.guilds.cache.size}`,
       `**Started:** <t:${Math.floor(startedAt / 1000)}:R>`,
     ];
-    await interaction.reply({ content: lines.join('\n'), ephemeral: true });
+    await interaction.reply({ content: lines.join('\n'), flags: MessageFlags.Ephemeral });
     return;
   }
 
   if (interaction.commandName === 'clear') {
     const count = interaction.options.getInteger('count', true);
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       const channel = interaction.channel;
@@ -168,7 +175,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!targetChannel?.isTextBased()) {
       await interaction.reply({
         content: 'Pick a text, announcement, or public thread channel.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -195,14 +202,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const text = interaction.options.getString('message', true);
     const channel = interaction.channel;
     if (!channel?.isTextBased()) {
-      await interaction.reply({ content: 'Use this in a text channel.', ephemeral: true });
+      await interaction.reply({
+        content: 'Use this in a text channel.',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
     const userId = interaction.user.id;
     const ms = minutes * 60 * 1000;
     await interaction.reply({
       content: `Reminder set for **${minutes}** minute(s) in this channel.`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     setTimeout(async () => {
       try {
@@ -225,18 +235,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({
         content:
           "Invalid link. Use **Copy Message Link** on the bot's message, or format `guildId-channelId-messageId`.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
     if (interaction.guildId && parsed.guildId !== interaction.guildId) {
       await interaction.reply({
         content: 'That message is from another server.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const ch = await client.channels.fetch(parsed.channelId);
       if (!ch?.isTextBased()) {
@@ -264,12 +274,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const text = interaction.options.getString('message', true);
     try {
       await user.send(text);
-      await interaction.reply({ content: `DM sent to **${user.tag}**.`, ephemeral: true });
+      await interaction.reply({
+        content: `DM sent to **${user.tag}**.`,
+        flags: MessageFlags.Ephemeral,
+      });
     } catch (err) {
       console.error(err);
       await interaction.reply({
         content: `Could not DM **${user.tag}** (DMs closed or no shared server). ${err.message}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
     return;
@@ -277,7 +290,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === 'user') {
     const user = interaction.options.getUser('member', true);
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const lines = [
         `**User:** ${user.tag} (\`${user.id}\`)`,
