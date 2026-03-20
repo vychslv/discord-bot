@@ -17,12 +17,13 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
 3. **Invite the bot**
    - Developer Portal → Your App → OAuth2 → URL Generator.
    - Scopes: `bot`.
-   - Bot permissions: e.g. "Send Messages", "Read Message History", "Manage Messages" (needed for `/clear`).
+   - Bot permissions: e.g. "Send Messages", "Read Message History", "Manage Messages" (needed for `/clear`), and "Manage Roles" (needed for `/rr`).
    - Open the generated URL and add the bot to your server.
 
 4. **Bot intents**
    - For `/send` text capture, enable **Message Content Intent**.
    - For **welcome/goodbye** (join/leave events), enable **Server Members Intent** (Guild Members).
+   - For **reaction self-roles** (`/rr`), ensure **Guild Message Reactions** intent is enabled (so reaction add/remove events are received).
 
 5. **Install and run**
    ```bash
@@ -51,6 +52,17 @@ This bot only responds to **you**. Everyone else gets a short "only the bot owne
 - **`/welcome off`** – Disables welcome messages.
 - **`/goodbye set <channel> <message>`** – Sends a goodbye template to leaving members (use `{member}` for mention).
 - **`/goodbye off`** – Disables goodbye messages.
+- **`/rr ...`** – Reaction self-role panels:
+  - `/rr create channel:<#> message:<text>`
+  - `/rr add message_link:<link> emoji:<emoji> role:<@role>`
+  - `/rr remove message_link:<link> emoji:<emoji>`
+  - `/rr list message_link:<link>`
+  - `/rr clear message_link:<link>`
+  - `/rr delete message_link:<link> delete_message:<true|false>`
+- **`/giveaway ...`** – Timed giveaways:
+  - `/giveaway start type:<random|invites> duration_hours:<n> channel:<#>`
+  - `/giveaway status`
+  - `/giveaway cancel`
 
 ## Deploy to Railway
 

@@ -173,4 +173,167 @@ export const commands = [
       },
     ],
   },
+  {
+    name: 'rr',
+    description: 'Reaction self-roles panel manager (owner only)',
+    options: [
+      {
+        name: 'create',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Create a panel message',
+        options: [
+          {
+            name: 'channel',
+            type: ApplicationCommandOptionType.Channel,
+            description: 'Where to post the panel',
+            required: true,
+            channel_types: [0, 5, 11],
+          },
+          {
+            name: 'message',
+            type: ApplicationCommandOptionType.String,
+            description: 'Panel text',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'add',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Map an emoji to a role',
+        options: [
+          {
+            name: 'message_link',
+            type: ApplicationCommandOptionType.String,
+            description: 'Panel message link',
+            required: true,
+          },
+          {
+            name: 'emoji',
+            type: ApplicationCommandOptionType.String,
+            description: 'Emoji (unicode or <:name:id>)',
+            required: true,
+          },
+          {
+            name: 'role',
+            type: ApplicationCommandOptionType.Role,
+            description: 'Role to grant on react add',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'remove',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Unmap emoji and remove role from members',
+        options: [
+          {
+            name: 'message_link',
+            type: ApplicationCommandOptionType.String,
+            description: 'Panel message link',
+            required: true,
+          },
+          {
+            name: 'emoji',
+            type: ApplicationCommandOptionType.String,
+            description: 'Emoji used in the mapping',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'list',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'List emoji->role mappings for a panel',
+        options: [
+          {
+            name: 'message_link',
+            type: ApplicationCommandOptionType.String,
+            description: 'Panel message link',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'clear',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Remove all mappings for a panel',
+        options: [
+          {
+            name: 'message_link',
+            type: ApplicationCommandOptionType.String,
+            description: 'Panel message link',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'delete',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Delete panel config (and message optionally)',
+        options: [
+          {
+            name: 'message_link',
+            type: ApplicationCommandOptionType.String,
+            description: 'Panel message link',
+            required: true,
+          },
+          {
+            name: 'delete_message',
+            type: ApplicationCommandOptionType.Boolean,
+            description: 'Also delete the panel message',
+            required: false,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'giveaway',
+    description: 'Timed giveaways (owner only)',
+    options: [
+      {
+        name: 'start',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Start a giveaway',
+        options: [
+          {
+            name: 'type',
+            type: ApplicationCommandOptionType.String,
+            description: 'Giveaway type',
+            required: true,
+            choices: [
+              { name: 'random', value: 'random' },
+              { name: 'invites', value: 'invites' },
+            ],
+          },
+          {
+            name: 'duration_hours',
+            type: ApplicationCommandOptionType.Integer,
+            description: 'Duration in hours',
+            required: true,
+            min_value: 1,
+            max_value: 168,
+          },
+          {
+            name: 'channel',
+            type: ApplicationCommandOptionType.Channel,
+            description: 'Channel to post the winner',
+            required: true,
+            channel_types: [0, 5, 11],
+          },
+        ],
+      },
+      {
+        name: 'status',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Show time left',
+      },
+      {
+        name: 'cancel',
+        type: ApplicationCommandOptionType.Subcommand,
+        description: 'Cancel the active giveaway',
+      },
+    ],
+  },
 ];

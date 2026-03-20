@@ -7,6 +7,7 @@ import {
   Events,
   GatewayIntentBits,
   MessageFlags,
+  Partials,
   REST,
   Routes,
 } from 'discord.js';
@@ -45,13 +46,17 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
   ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, 'data');
 const GREETINGS_PATH = path.join(DATA_DIR, 'greetings.json');
+const REACTION_ROLES_PATH = path.join(DATA_DIR, 'reaction-roles.json');
+const GIVEAWAYS_PATH = path.join(DATA_DIR, 'giveaways.json');
 
 const DEFAULT_GUILD_CONFIG = {
   welcome: {
@@ -68,6 +73,22 @@ const DEFAULT_GUILD_CONFIG = {
 
 /** @type {Record<string, typeof DEFAULT_GUILD_CONFIG>} */
 let greetingsByGuildId = {};
+
+/**
+ * Reaction self-role panels config:
+ * {
+ *   [guildId]: {
+ *     panels: {
+ *       [messageId]: {
+ *         channelId: string,
+ *         enabled: boolean,
+ *         rolesByEmojiKey: { [emojiKey]: { roleId: string, reactEmoji: string } }
+ *       }
+ *     }
+ *   }
+ * }
+ */
+let reactionRolesByGuildId = {};
 
 function loadGreetingsConfig() {
   try {
@@ -116,6 +137,223 @@ function renderGreeting(template, member) {
 
 loadGreetingsConfig();
 
+function loadReactionRolesConfig() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(REACTION_ROLES_PATH)) {
+      fs.writeFileSync(REACTION_ROLES_PATH, JSON.stringify({}, null, 2), 'utf8');
+    }
+    const raw = fs.readFileSync(REACTION_ROLES_PATH, 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    reactionRolesByGuildId = parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    console.error('Failed to load reaction roles config:', err);
+    reactionRolesByGuildId = {};
+  }
+}
+
+function saveReactionRolesConfig() {
+  try {
+    fs.writeFileSync(REACTION_ROLES_PATH, JSON.stringify(reactionRolesByGuildId, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save reaction roles config:', err);
+  }
+}
+
+function getReactionPanel(guildId, messageId) {
+  if (!reactionRolesByGuildId[guildId]) reactionRolesByGuildId[guildId] = { panels: {} };
+  if (!reactionRolesByGuildId[guildId].panels) reactionRolesByGuildId[guildId].panels = {};
+  const panels = reactionRolesByGuildId[guildId].panels;
+  if (!panels[messageId]) {
+    panels[messageId] = {
+      channelId: null,
+      enabled: true,
+      rolesByEmojiKey: {},
+    };
+  }
+  return panels[messageId];
+}
+
+function getReactionPanelIfExists(guildId, messageId) {
+  return reactionRolesByGuildId?.[guildId]?.panels?.[messageId] ?? null;
+}
+
+function deleteReactionPanel(guildId, messageId) {
+  if (!reactionRolesByGuildId[guildId]?.panels) return;
+  delete reactionRolesByGuildId[guildId].panels[messageId];
+}
+
+function getEmojiKeyFromReactionEmoji(emoji) {
+  // Custom emoji has an `id`, unicode emoji usually only has a `name`.
+  if (emoji?.id) return `custom:${emoji.id}`;
+  const str = typeof emoji?.toString === 'function' ? emoji.toString() : `${emoji ?? ''}`;
+  return `unicode:${str}`;
+}
+
+/**
+ * Convert user emoji input to a stable emojiKey and the value that discord.js can use in `message.react()`.
+ * unicode:🎮 stays as the raw emoji string.
+ * custom: <:name:id> keeps the full `<:name:id>` string for reacting, but keys by id.
+ */
+function parseEmojiToKeyAndReactEmoji(emojiInput) {
+  const s = (emojiInput ?? '').trim();
+  const m = s.match(/^<a?:([^:>]+):(\d+)>$/);
+  if (m) {
+    const id = m[2];
+    return { emojiKey: `custom:${id}`, reactEmoji: s };
+  }
+  return { emojiKey: `unicode:${s}`, reactEmoji: s };
+}
+
+loadReactionRolesConfig();
+
+/**
+ * Giveaway persistence.
+ * Only one active giveaway per guild.
+ */
+let activeGiveawayByGuildId = {};
+let giveawayFinalizeTimeouts = {};
+
+function loadGiveawaysConfig() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(GIVEAWAYS_PATH)) {
+      fs.writeFileSync(GIVEAWAYS_PATH, JSON.stringify({}, null, 2), 'utf8');
+    }
+    const raw = fs.readFileSync(GIVEAWAYS_PATH, 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    activeGiveawayByGuildId =
+      parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    console.error('Failed to load giveaways config:', err);
+    activeGiveawayByGuildId = {};
+  }
+}
+
+function saveGiveawaysConfig() {
+  try {
+    fs.writeFileSync(GIVEAWAYS_PATH, JSON.stringify(activeGiveawayByGuildId, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save giveaways config:', err);
+  }
+}
+
+loadGiveawaysConfig();
+
+function formatMs(ms) {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function isRealEligibleMember(member) {
+  if (!member) return false;
+  if (member.user?.bot) return false;
+  if (member.id === OWNER_ID) return false; // never allow owner to be a winner
+  const createdTs = member.user?.createdTimestamp;
+  if (!createdTs) return false;
+  const ageDays = (Date.now() - createdTs) / (1000 * 60 * 60 * 24);
+  return ageDays >= 7;
+}
+
+async function finalizeGiveaway(guildId) {
+  const giveaway = activeGiveawayByGuildId?.[guildId];
+  if (!giveaway) return;
+  // Avoid double-finalization.
+  if (giveaway.finalized) return;
+  giveaway.finalized = true;
+  saveGiveawaysConfig();
+
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    const channel = guild ? await client.channels.fetch(giveaway.channelId).catch(() => null) : null;
+    if (!channel?.isTextBased()) return;
+
+    const type = giveaway.type;
+    const winnersMessagePrefix = 'Winner';
+
+    if (type === 'random') {
+      const members = await guild.members.fetch().catch(() => null);
+      const liveIds = members ? [...members.values()].filter(isRealEligibleMember).map((m) => m.id) : [];
+
+      if (!liveIds.length) {
+        await channel.send('Giveaway cancelled.');
+      } else {
+        const winnerId = liveIds[Math.floor(Math.random() * liveIds.length)];
+        await channel.send(`${winnersMessagePrefix}: <@${winnerId}>`);
+      }
+    } else if (type === 'invites') {
+      const scores = giveaway.inviteScoresByInviterId || {};
+      const nonOwner = Object.entries(scores).filter(
+        ([inviterId, score]) => inviterId !== OWNER_ID && typeof score === 'number' && score > 0,
+      );
+
+      if (!nonOwner.length) {
+        await channel.send('Giveaway cancelled.');
+      } else {
+        const botSafe = [];
+        for (const [inviterId, score] of nonOwner) {
+          const inviterMember = await guild.members.fetch(inviterId).catch(() => null);
+          if (inviterMember && !inviterMember.user.bot) botSafe.push([inviterId, score]);
+        }
+
+        if (!botSafe.length) {
+          await channel.send('Giveaway cancelled.');
+          return;
+        }
+
+        const maxScore = Math.max(...botSafe.map(([, score]) => score));
+        const winners = botSafe
+          .filter(([, score]) => score === maxScore)
+          .map(([id]) => id);
+        if (!winners.length) {
+          await channel.send('Giveaway cancelled.');
+        } else {
+          await channel.send(
+            `Winners: ${winners.map((id) => `<@${id}>`).join(' ')}`,
+          );
+        }
+      }
+    } else {
+      await channel.send('Giveaway cancelled.');
+    }
+  } catch (err) {
+    console.error('Giveaway finalize failed:', err);
+  } finally {
+    delete activeGiveawayByGuildId[guildId];
+    saveGiveawaysConfig();
+    if (giveawayFinalizeTimeouts[guildId]) {
+      clearTimeout(giveawayFinalizeTimeouts[guildId]);
+      delete giveawayFinalizeTimeouts[guildId];
+    }
+  }
+}
+
+function scheduleGiveawayFinalize(guildId) {
+  const giveaway = activeGiveawayByGuildId?.[guildId];
+  if (!giveaway || giveaway.finalized) return;
+
+  const delayMs = giveaway.endsAt - Date.now();
+  if (giveawayFinalizeTimeouts[guildId]) {
+    clearTimeout(giveawayFinalizeTimeouts[guildId]);
+    delete giveawayFinalizeTimeouts[guildId];
+  }
+
+  if (delayMs <= 0) {
+    void finalizeGiveaway(guildId);
+    return;
+  }
+
+  giveawayFinalizeTimeouts[guildId] = setTimeout(
+    () => finalizeGiveaway(guildId),
+    delayMs,
+  );
+}
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`Logged in as ${c.user.tag}`);
   const appId = c.application?.id ?? c.user.id;
@@ -131,6 +369,11 @@ client.once(Events.ClientReady, async (c) => {
     }
   } catch (e) {
     console.error('Failed to register commands:', e);
+  }
+
+  // Schedule any saved giveaways (timer persistence).
+  for (const guildId of Object.keys(activeGiveawayByGuildId)) {
+    scheduleGiveawayFinalize(guildId);
   }
 });
 
@@ -151,14 +394,148 @@ async function sendGreeting(kind, member) {
   await channel.send({ content: rendered });
 }
 
+async function processGiveawayMemberJoin(member) {
+  const guildId = member.guild?.id;
+  if (!guildId) return;
+  const giveaway = activeGiveawayByGuildId?.[guildId];
+  if (!giveaway || giveaway.finalized) return;
+  if (Date.now() > giveaway.endsAt) return;
+
+  // "Real people": no bots, min account age, and owner excluded.
+  if (!isRealEligibleMember(member)) return;
+
+  if (giveaway.type === 'random') {
+    // Random winner is picked from the whole server at the end.
+    return;
+  }
+
+  if (giveaway.type === 'invites') {
+    if (!giveaway.inviteScoresByInviterId) giveaway.inviteScoresByInviterId = {};
+    if (!giveaway.inviteSnapshotByCode) giveaway.inviteSnapshotByCode = {};
+
+    let currentInvites;
+    try {
+      currentInvites = await member.guild.invites.fetch();
+    } catch (err) {
+      console.error('Giveaway invites fetch failed:', err);
+      return;
+    }
+
+    const changed = [];
+    const nextSnapshot = { ...giveaway.inviteSnapshotByCode };
+
+    for (const inv of currentInvites.values()) {
+      const code = inv.code;
+      const newUses = typeof inv.uses === 'number' ? inv.uses : 0;
+      const prevUses = nextSnapshot?.[code]?.uses ?? 0;
+      if (newUses > prevUses) {
+        changed.push({ inviterId: inv.inviter?.id ?? null, delta: newUses - prevUses });
+      }
+      nextSnapshot[code] = { uses: newUses, inviterId: inv.inviter?.id ?? null };
+    }
+
+    giveaway.inviteSnapshotByCode = nextSnapshot;
+
+    if (changed.length === 1) {
+      const inviterId = changed[0].inviterId;
+      if (inviterId && inviterId !== OWNER_ID) {
+        giveaway.inviteScoresByInviterId[inviterId] = (giveaway.inviteScoresByInviterId[inviterId] ?? 0) + 1;
+      } else if (!inviterId) {
+        giveaway.fakeInviteCount = (giveaway.fakeInviteCount ?? 0) + 1;
+      }
+    } else {
+      // Can't attribute confidently.
+      giveaway.fakeInviteCount = (giveaway.fakeInviteCount ?? 0) + 1;
+    }
+
+    saveGiveawaysConfig();
+    return;
+  }
+}
+
 client.on(Events.GuildMemberAdd, async (member) => {
   if (member.user.bot) return;
+  await processGiveawayMemberJoin(member);
   await sendGreeting('welcome', member);
 });
 
 client.on(Events.GuildMemberRemove, async (member) => {
   if (member.user.bot) return;
   await sendGreeting('goodbye', member);
+});
+
+async function canManageRole(guild, roleId) {
+  try {
+    const role =
+      guild.roles.cache.get(roleId) || (await guild.roles.fetch(roleId)).catch(() => null);
+    if (!role) return false;
+
+    const botMember =
+      guild.members.cache.get(client.user.id) ||
+      (await guild.members.fetch(client.user.id)).catch(() => null);
+    if (!botMember) return false;
+
+    // Role hierarchy check: bot can only manage roles below its highest role.
+    return botMember.roles.highest.position > role.position;
+  } catch {
+    return false;
+  }
+}
+
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  try {
+    if (user?.bot) return;
+    const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+    if (!message?.guild) return;
+
+    const guildId = message.guild.id;
+    if (GUILD_ID && guildId !== GUILD_ID) return;
+
+    const panel = getReactionPanelIfExists(guildId, message.id);
+    if (!panel?.enabled) return;
+
+    const emojiKey = getEmojiKeyFromReactionEmoji(reaction.emoji);
+    const entry = panel.rolesByEmojiKey[emojiKey];
+    if (!entry?.roleId) return;
+
+    const member = await message.guild.members.fetch(user.id).catch(() => null);
+    if (!member) return;
+
+    if (!(await canManageRole(message.guild, entry.roleId))) return;
+    if (member.roles.cache.has(entry.roleId)) return;
+
+    await member.roles.add(entry.roleId).catch(() => {});
+  } catch (err) {
+    console.error('RR add failed:', err);
+  }
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  try {
+    if (user?.bot) return;
+    const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+    if (!message?.guild) return;
+
+    const guildId = message.guild.id;
+    if (GUILD_ID && guildId !== GUILD_ID) return;
+
+    const panel = getReactionPanelIfExists(guildId, message.id);
+    if (!panel?.enabled) return;
+
+    const emojiKey = getEmojiKeyFromReactionEmoji(reaction.emoji);
+    const entry = panel.rolesByEmojiKey[emojiKey];
+    if (!entry?.roleId) return;
+
+    const member = await message.guild.members.fetch(user.id).catch(() => null);
+    if (!member) return;
+
+    if (!(await canManageRole(message.guild, entry.roleId))) return;
+    if (!member.roles.cache.has(entry.roleId)) return;
+
+    await member.roles.remove(entry.roleId).catch(() => {});
+  } catch (err) {
+    console.error('RR remove failed:', err);
+  }
 });
 
 const HELP_TEXT = [
@@ -176,6 +553,10 @@ const HELP_TEXT = [
   '`/welcome off` — disable welcome messages.',
   '`/goodbye set channel:#… message:…` — say goodbye on leave.',
   '`/goodbye off` — disable goodbye messages.',
+  '`/rr create` `/rr add` `/rr remove` `/rr list` `/rr clear` `/rr delete` — reaction self-roles panels.',
+  '`/giveaway start type:<random|invites> duration_hours:<n> channel:<#>` — start a timed giveaway.',
+  '`/giveaway status` — show time left for the active giveaway.',
+  '`/giveaway cancel` — cancel the active giveaway.',
   '',
   '**Intents:** welcome/goodbye uses Server Members; /send text capture uses Message Content.',
 ].join('\n');
@@ -188,6 +569,404 @@ client.on(Events.InteractionCreate, async (interaction) => {
       content: 'Only the bot owner can use commands.',
       flags: MessageFlags.Ephemeral,
     });
+    return;
+  }
+
+  if (interaction.commandName === 'rr') {
+    const sub = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.reply({ content: 'Run this in a server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (GUILD_ID && guildId !== GUILD_ID) {
+      await interaction.reply({
+        content: 'This bot is configured for a single server.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (sub === 'create') {
+      const channel = interaction.options.getChannel('channel', true);
+      const messageText = interaction.options.getString('message', true);
+      if (!channel?.isTextBased()) {
+        await interaction.reply({ content: 'Pick a text channel.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        const panelMessage = await channel.send(`${messageText}\n\nReact with the configured emojis to get roles.`);
+        const panel = getReactionPanel(guildId, panelMessage.id);
+        panel.channelId = channel.id;
+        panel.enabled = true;
+        // Keep existing mapping if it exists (re-create after crash).
+        if (!panel.rolesByEmojiKey) panel.rolesByEmojiKey = {};
+        saveReactionRolesConfig();
+
+        await interaction.editReply({
+          content: `Panel created. Use this link in /rr add:\n${panelMessage.url}`,
+        });
+      } catch (err) {
+        console.error('RR create failed:', err);
+        await interaction.editReply({ content: `Failed: ${err.message}` }).catch(() => {});
+      }
+      return;
+    }
+
+    if (sub === 'add') {
+      const messageLink = interaction.options.getString('message_link', true);
+      const emojiInput = interaction.options.getString('emoji', true);
+      const role = interaction.options.getRole('role', true);
+
+      const parsed = parseDiscordMessageUrl(messageLink);
+      if (!parsed) {
+        await interaction.reply({ content: 'Invalid message link.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (GUILD_ID && parsed.guildId !== GUILD_ID) {
+        await interaction.reply({ content: 'That panel is not in this server.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const panel = reactionRolesByGuildId?.[parsed.guildId]?.panels?.[parsed.messageId];
+      if (!panel) {
+        await interaction.reply({
+          content: 'Panel not found in config. First run `/rr create` in the same message/channel.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const { emojiKey, reactEmoji } = parseEmojiToKeyAndReactEmoji(emojiInput);
+      panel.rolesByEmojiKey[emojiKey] = { roleId: role.id, reactEmoji };
+      saveReactionRolesConfig();
+
+      try {
+        const ch = await client.channels.fetch(parsed.channelId);
+        if (!ch?.isTextBased()) throw new Error('Channel is not text-based');
+        const panelMessage = await ch.messages.fetch(parsed.messageId);
+        await panelMessage.react(reactEmoji);
+      } catch (err) {
+        // Mapping is saved even if reacting fails; reaction events may still work.
+        console.error('RR add reaction failed:', err);
+      }
+
+      await interaction.reply({ content: 'Mapping saved.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (sub === 'remove') {
+      const messageLink = interaction.options.getString('message_link', true);
+      const emojiInput = interaction.options.getString('emoji', true);
+
+      const parsed = parseDiscordMessageUrl(messageLink);
+      if (!parsed) {
+        await interaction.reply({ content: 'Invalid message link.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const panel = reactionRolesByGuildId?.[parsed.guildId]?.panels?.[parsed.messageId];
+      if (!panel) {
+        await interaction.reply({ content: 'Panel not found in config.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const { emojiKey, reactEmoji } = parseEmojiToKeyAndReactEmoji(emojiInput);
+      const entry = panel.rolesByEmojiKey[emojiKey];
+      if (!entry?.roleId) {
+        await interaction.reply({ content: 'That emoji is not mapped on this panel.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      delete panel.rolesByEmojiKey[emojiKey];
+      saveReactionRolesConfig();
+
+      // Remove the role from everyone who currently has it.
+      try {
+        const guild = await client.guilds.fetch(parsed.guildId);
+        const members = await guild.members.fetch();
+        await Promise.all(
+          [...members.values()].map(async (m) => {
+            if (m.roles.cache.has(entry.roleId)) {
+              await m.roles.remove(entry.roleId).catch(() => {});
+            }
+          }),
+        );
+      } catch (err) {
+        console.error('RR remove role cleanup failed:', err);
+      }
+
+      // Remove the bot's reaction (best-effort).
+      try {
+        const ch = await client.channels.fetch(parsed.channelId);
+        if (ch?.isTextBased()) {
+          const panelMessage = await ch.messages.fetch(parsed.messageId);
+          await panelMessage.reactions.fetch().catch(() => {});
+          const reaction = panelMessage.reactions.resolve(entry.reactEmoji ?? reactEmoji);
+          if (reaction) await reaction.users.remove(client.user.id).catch(() => {});
+        }
+      } catch (err) {
+        console.error('RR remove reaction cleanup failed:', err);
+      }
+
+      await interaction.reply({ content: 'Mapping removed and role cleaned up.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (sub === 'list') {
+      const messageLink = interaction.options.getString('message_link', true);
+      const parsed = parseDiscordMessageUrl(messageLink);
+      if (!parsed) {
+        await interaction.reply({ content: 'Invalid message link.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const panel = reactionRolesByGuildId?.[parsed.guildId]?.panels?.[parsed.messageId];
+      if (!panel) {
+        await interaction.reply({ content: 'Panel not found in config.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const guild = await client.guilds.fetch(parsed.guildId);
+      const lines = Object.entries(panel.rolesByEmojiKey).map(([emojiKey, entry]) => {
+        const roleMention = guild.roles.cache.get(entry.roleId)?.toString() ?? entry.roleId;
+        return `${entry.reactEmoji} -> ${roleMention}`;
+      });
+      const preview = lines.slice(0, 20).join('\n') || '(no mappings)';
+      await interaction.reply({ content: `Panel mappings:\n${preview}`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (sub === 'clear') {
+      const messageLink = interaction.options.getString('message_link', true);
+      const parsed = parseDiscordMessageUrl(messageLink);
+      if (!parsed) {
+        await interaction.reply({ content: 'Invalid message link.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const panel = reactionRolesByGuildId?.[parsed.guildId]?.panels?.[parsed.messageId];
+      if (!panel) {
+        await interaction.reply({ content: 'Panel not found in config.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const uniqueRoleIds = [...new Set(Object.values(panel.rolesByEmojiKey).map((e) => e.roleId))];
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      try {
+        const guild = await client.guilds.fetch(parsed.guildId);
+        const members = await guild.members.fetch();
+        await Promise.all(
+          [...members.values()].map(async (m) => {
+            for (const rId of uniqueRoleIds) {
+              if (m.roles.cache.has(rId)) {
+                await m.roles.remove(rId).catch(() => {});
+              }
+            }
+          }),
+        );
+      } catch (err) {
+        console.error('RR clear cleanup failed:', err);
+      }
+
+      // Best-effort: remove bot reactions for mapped emojis.
+      try {
+        const ch = await client.channels.fetch(parsed.channelId);
+        if (ch?.isTextBased()) {
+          const panelMessage = await ch.messages.fetch(parsed.messageId);
+          await panelMessage.reactions.fetch().catch(() => {});
+          for (const entry of Object.values(panel.rolesByEmojiKey)) {
+            const reaction = panelMessage.reactions.resolve(entry.reactEmoji);
+            if (reaction) await reaction.users.remove(client.user.id).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error('RR clear reaction cleanup failed:', err);
+      }
+
+      panel.rolesByEmojiKey = {};
+      saveReactionRolesConfig();
+      await interaction.editReply({ content: 'Panel mappings cleared (role cleanup best-effort).' });
+      return;
+    }
+
+    if (sub === 'delete') {
+      const messageLink = interaction.options.getString('message_link', true);
+      const deleteMessage = interaction.options.getBoolean('delete_message') ?? false;
+      const parsed = parseDiscordMessageUrl(messageLink);
+      if (!parsed) {
+        await interaction.reply({ content: 'Invalid message link.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const panel = reactionRolesByGuildId?.[parsed.guildId]?.panels?.[parsed.messageId];
+      if (!panel) {
+        await interaction.reply({ content: 'Panel not found in config.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      // Remove any granted roles (best-effort), then delete config.
+      try {
+        const guild = await client.guilds.fetch(parsed.guildId);
+        const members = await guild.members.fetch();
+        const roleIds = [...new Set(Object.values(panel.rolesByEmojiKey).map((e) => e.roleId))];
+        await Promise.all(
+          [...members.values()].map(async (m) => {
+            for (const rId of roleIds) {
+              if (m.roles.cache.has(rId)) await m.roles.remove(rId).catch(() => {});
+            }
+          }),
+        );
+      } catch (err) {
+        console.error('RR delete role cleanup failed:', err);
+      }
+
+      deleteReactionPanel(parsed.guildId, parsed.messageId);
+      saveReactionRolesConfig();
+
+      if (deleteMessage) {
+        try {
+          const ch = await client.channels.fetch(parsed.channelId);
+          if (ch?.isTextBased()) {
+            const panelMessage = await ch.messages.fetch(parsed.messageId);
+            await panelMessage.delete().catch(() => {});
+          }
+        } catch (err) {
+          console.error('RR delete message failed:', err);
+        }
+      }
+
+      await interaction.reply({ content: 'Panel deleted.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({ content: 'Unknown subcommand.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  if (interaction.commandName === 'giveaway') {
+    const sub = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.reply({ content: 'Run this in a server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (GUILD_ID && guildId !== GUILD_ID) {
+      await interaction.reply({ content: 'This bot is configured for a single server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const existing = activeGiveawayByGuildId?.[guildId];
+
+    if (sub === 'start') {
+      if (existing && !existing.finalized) {
+        const left = existing.endsAt - Date.now();
+        await interaction.reply({
+          content: `Giveaway already running. Time left: ${formatMs(left)}.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      const type = interaction.options.getString('type', true);
+      const durationHours = interaction.options.getInteger('duration_hours', true);
+      const channel = interaction.options.getChannel('channel', true);
+
+      if (!channel?.isTextBased()) {
+        await interaction.reply({ content: 'Pick a text channel.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const startedAt = Date.now();
+      const endsAt = startedAt + durationHours * 60 * 60 * 1000;
+
+      const giveaway = {
+        guildId,
+        type,
+        channelId: channel.id,
+        startedAt,
+        endsAt,
+        finalized: false,
+        eligibleRandomMemberIds: [],
+        inviteScoresByInviterId: {},
+        fakeInviteCount: 0,
+        inviteSnapshotByCode: {},
+      };
+
+      // Build invite snapshot at start (only for invite-based giveaways).
+      if (type === 'invites') {
+        try {
+          const guild = interaction.guild;
+          if (!guild) throw new Error('Missing guild context');
+          const invites = await guild.invites.fetch();
+          for (const inv of invites.values()) {
+            giveaway.inviteSnapshotByCode[inv.code] = {
+              uses: typeof inv.uses === 'number' ? inv.uses : 0,
+              inviterId: inv.inviter?.id ?? null,
+            };
+          }
+        } catch (err) {
+          console.error('Giveaway invite snapshot failed:', err);
+          await interaction.reply({
+            content: `Failed to fetch invites: ${err.message}`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+      }
+
+      activeGiveawayByGuildId[guildId] = giveaway;
+      saveGiveawaysConfig();
+      scheduleGiveawayFinalize(guildId);
+
+      await interaction.reply({
+        content: `Giveaway started (${type}) for ${durationHours} hour(s).`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (sub === 'status') {
+      if (!existing || existing.finalized) {
+        await interaction.reply({ content: 'No active giveaway.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const left = existing.endsAt - Date.now();
+      await interaction.reply({
+        content: `Active giveaway (${existing.type}). Time left: ${formatMs(left)}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (sub === 'cancel') {
+      if (!existing || existing.finalized) {
+        await interaction.reply({ content: 'No active giveaway.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      delete activeGiveawayByGuildId[guildId];
+      saveGiveawaysConfig();
+      if (giveawayFinalizeTimeouts[guildId]) {
+        clearTimeout(giveawayFinalizeTimeouts[guildId]);
+        delete giveawayFinalizeTimeouts[guildId];
+      }
+
+      try {
+        const guild = await client.guilds.fetch(guildId);
+        const channel = guild ? await client.channels.fetch(existing.channelId).catch(() => null) : null;
+        if (channel?.isTextBased()) {
+          await channel.send('Giveaway cancelled.');
+        }
+      } catch (err) {
+        console.error('Giveaway cancel post failed:', err);
+      }
+
+      await interaction.reply({ content: 'Cancelled.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({ content: 'Unknown giveaway subcommand.', flags: MessageFlags.Ephemeral });
     return;
   }
 
